@@ -8,7 +8,7 @@
  */
 #include "OpenMsg.h"
 #include "AddPathDataContainer.h"
-#include "BGPOpenValidation.h"
+#include "BGPOpenParams.h"
 #include "BMPReader.h"
 
 #include <string>
@@ -59,22 +59,19 @@ OpenMsg::~OpenMsg() {
 size_t OpenMsg::parseOpenMsg(u_char *data, size_t size, bool openMessageIsSent, uint32_t &asn, uint16_t &holdTime,
                              std::string &bgp_id, std::list<std::string> &capabilities) {
     char        bgp_id_char[16];
-    size_t      read_size       = 0;
-    u_char      *bufPtr         = data;
     open_bgp_hdr open_hdr       = {0};
+    bgp::OpenParamsView params;
     capabilities.clear();
 
     /*
      * Make sure available size is large enough for an open message
      */
-    if (!bgp::validateOpenPayload(data, size)) {
-        LOG_WARN("%s: Could not read malformed or truncated open message", peer_addr.c_str());
+    if (!bgp::locateOpenParameters(data, size, params)) {
+        LOG_WARN("%s: Cloud not read open message due to buffer having less bytes than open message size", peer_addr.c_str());
         return 0;
     }
 
-    memcpy(&open_hdr, bufPtr, sizeof(open_hdr));
-    read_size = sizeof(open_hdr);
-    bufPtr += read_size;                                       // Move pointer past the open header
+    memcpy(&open_hdr, data, sizeof(open_hdr));
 
     // Change to host order
     bgp::SWAP_BYTES(&open_hdr.hold);
@@ -90,19 +87,29 @@ size_t OpenMsg::parseOpenMsg(u_char *data, size_t size, bool openMessageIsSent, 
     SELF_DEBUG("%s: Open message:ver=%d hold=%u asn=%hu bgp_id=%s params_len=%d", peer_addr.c_str(),
                 open_hdr.ver, open_hdr.hold, open_hdr.asn, bgp_id.c_str(), open_hdr.param_len);
 
-    if (open_hdr.param_len == 0) {
+    /*
+     * Allow a zero length in case the data is missing on purpose (router implementation)
+     */
+    if (params.length == 0 && !params.truncated) {
         LOG_WARN("%s: Capabilities in open message is ZERO/empty, this is abnormal and likely a router implementation issue.", peer_addr.c_str());
-        return read_size;
+        return size;
     }
 
-    if (parseCapabilities(bufPtr, open_hdr.param_len, openMessageIsSent, asn, capabilities) !=
-            open_hdr.param_len) {
+    if (params.truncated) {
+        LOG_WARN("%s: Capabilities in open message are truncated, attempting parse what's there; %zu bytes available",
+                 peer_addr.c_str(), params.length);
+
+        // Parse as many capabilities as possible
+        parseCapabilities(params.data, params.length, params.extended, openMessageIsSent, asn, capabilities);
+
+    } else if (!parseCapabilities(params.data, params.length, params.extended, openMessageIsSent, asn,
+                                  capabilities)) {
         LOG_WARN("%s: Could not read capabilities correctly in buffer, message is invalid.", peer_addr.c_str());
         return 0;
     }
 
-    read_size += open_hdr.param_len;
-    return read_size;
+    // The enclosing BGP message length is authoritative for how much was consumed
+    return size;
 }
 
 
@@ -121,50 +128,45 @@ size_t OpenMsg::parseOpenMsg(u_char *data, size_t size, bool openMessageIsSent, 
  *
  * \return ZERO is error, otherwise a positive value indicating the number of bytes read
  */
-size_t OpenMsg::parseCapabilities(u_char *data, size_t size, bool openMessageIsSent, uint32_t &asn,
-                         std::list<std::string> &capabilities)
+bool OpenMsg::parseCapabilities(const u_char *data, size_t size, bool extended, bool openMessageIsSent,
+                                uint32_t &asn, std::list<std::string> &capabilities)
 {
-    size_t      read_size   = 0;
-    u_char      *bufPtr     = data;
+    char                    capStr[200];
+    bgp::OpenElement        param;
+    bgp::OpenElement        cap;
+    bgp::OpenElementCursor  params(data, size, extended);
+    bgp::OpenReadResult     param_result;
 
     /*
-     * Loop through the capabilities (will set the 4 byte ASN)
+     * Loop through the optional parameters (will set the 4 byte ASN)
      */
-    char        capStr[200];
-    open_param  *param;
-    cap_param   *cap;
+    while ((param_result = params.next(param)) == bgp::OpenReadResult::OK) {
+        SELF_DEBUG("%s: Open param type=%d len=%zu", peer_addr.c_str(), param.type, param.length);
 
-    for (int i=0; i < size; ) {
-        param = (open_param *)bufPtr;
-        SELF_DEBUG("%s: Open param type=%d len=%d", peer_addr.c_str(), param->type, param->len);
-
-        if (param->type != BGP_CAP_PARAM_TYPE) {
+        if (param.type != BGP_CAP_PARAM_TYPE) {
             LOG_NOTICE("%s: Open param type %d is not supported, expected type %d", peer_addr.c_str(),
-                        param->type, BGP_CAP_PARAM_TYPE);
+                        param.type, BGP_CAP_PARAM_TYPE);
+            continue;
         }
 
-        /*
-         * Process the capabilities if present
-         */
-        else if (param->len >= 2 and (read_size + 2 + param->len) <= size) {
-            u_char *cap_ptr = bufPtr + 2;
+        bgp::OpenElementCursor caps(param.value, param.length, false);
+        bgp::OpenReadResult cap_result;
 
-            for (int c=0; c < param->len; ) {
-                cap = (cap_param *)cap_ptr;
-                SELF_DEBUG("%s: Capability code=%d len=%d", peer_addr.c_str(), cap->code, cap->len);
+        while ((cap_result = caps.next(cap)) == bgp::OpenReadResult::OK) {
+                SELF_DEBUG("%s: Capability code=%d len=%zu", peer_addr.c_str(), cap.type, cap.length);
 
                 /*
                  * Handle the capability
                  */
-                switch (cap->code) {
+                switch (cap.type) {
                     case BGP_CAP_4OCTET_ASN :
-                        if (cap->len == 4) {
-                            memcpy(&asn, cap_ptr + 2, 4);
+                        if (cap.length == 4) {
+                            memcpy(&asn, cap.value, 4);
                             bgp::SWAP_BYTES(&asn);
                             snprintf(capStr, sizeof(capStr), "4 Octet ASN (%d)", BGP_CAP_4OCTET_ASN);
                             capabilities.push_back(capStr);
                         } else {
-                            LOG_NOTICE("%s: 4 octet ASN capability length is invalid %d expected 4", peer_addr.c_str(), cap->len);
+                            LOG_NOTICE("%s: 4 octet ASN capability length is invalid %zu expected 4", peer_addr.c_str(), cap.length);
                         }
                         break;
 
@@ -188,15 +190,17 @@ size_t OpenMsg::parseCapabilities(u_char *data, size_t size, bool openMessageIsS
 
                     case BGP_CAP_ADD_PATH: {
                         cap_add_path_data data;
-                        u_char *value_ptr = cap_ptr + 2;
 
                         /*
-                         * Move past the cap code and len, then iterate over all paths encoded
+                         * Iterate over all complete AFI/SAFI tuples encoded in the capability value
                          */
-                        if (cap->len >= 4) {
+                        if (cap.length % 4 != 0)
+                            LOG_NOTICE("%s: Add Path capability length %zu is not a multiple of 4, ignoring partial tuple",
+                                       peer_addr.c_str(), cap.length);
 
-                            for (int l = 0; l < cap->len; l += 4) {
-                                memcpy(&data, value_ptr + l, 4);
+                        {
+                            for (size_t l = 0; l + 4 <= cap.length; l += 4) {
+                                memcpy(&data, cap.value + l, 4);
 
                                 bgp::SWAP_BYTES(&data.afi);
 
@@ -264,8 +268,8 @@ size_t OpenMsg::parseCapabilities(u_char *data, size_t size, bool openMessageIsS
                     case BGP_CAP_MPBGP:
                     {
                         cap_mpbgp_data data;
-                        if (cap->len == sizeof(data)) {
-                            memcpy(&data, (cap_ptr + 2), sizeof(data));
+                        if (cap.length == sizeof(data)) {
+                            memcpy(&data, cap.value, sizeof(data));
                             bgp::SWAP_BYTES(&data.afi);
 
                             SELF_DEBUG("%s: supports MPBGP afi = %d safi=%d",
@@ -286,35 +290,33 @@ size_t OpenMsg::parseCapabilities(u_char *data, size_t size, bool openMessageIsS
 
                         }
                         else {
-                            LOG_NOTICE("%s: MPBGP capability but length %d is invalid expected %d.",
-                                    peer_addr.c_str(), cap->len, sizeof(data));
-                            return 0;
+                            LOG_NOTICE("%s: MPBGP capability but length %zu is invalid expected %zu.",
+                                    peer_addr.c_str(), cap.length, sizeof(data));
+                            return false;
                         }
 
                         break;
                     }
 
                     default :
-                        snprintf(capStr, sizeof(capStr), "%d", cap->code);
+                        snprintf(capStr, sizeof(capStr), "%d", cap.type);
                         capabilities.push_back(capStr);
 
-                        SELF_DEBUG("%s: Ignoring capability %d, not implemented", peer_addr.c_str(), cap->code);
+                        SELF_DEBUG("%s: Ignoring capability %d, not implemented", peer_addr.c_str(), cap.type);
                         break;
                 }
 
-                // Move the pointer to the next capability
-                c += 2 + cap->len;
-                cap_ptr += 2 + cap->len;
-             }
         }
 
-        // Move index to next param
-        i += 2 + param->len;
-        bufPtr += 2 + param->len;
-        read_size += 2 + param->len;
+        if (cap_result == bgp::OpenReadResult::TRUNCATED)
+            LOG_NOTICE("%s: Capability in open param is truncated, ignoring remaining capability bytes",
+                       peer_addr.c_str());
     }
 
-    return read_size;
+    if (param_result == bgp::OpenReadResult::TRUNCATED)
+        LOG_NOTICE("%s: Open param is truncated, ignoring remaining optional parameter bytes", peer_addr.c_str());
+
+    return true;
 }
 
 

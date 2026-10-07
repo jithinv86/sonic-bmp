@@ -50,14 +50,14 @@ bool NotificationMsg::parseNotify(u_char *data, size_t size, parsed_notify_msg &
     bzero(&parsed_msg, sizeof(parsed_msg));
 
     if (read_size < size)
-        parsed_msg.error_code = *dataPtr++, size++;
+        parsed_msg.error_code = *dataPtr++, read_size++;
     else {
         LOG_ERR("Could not read the BGP error code from notify message");
         return true;
     }
 
     if (read_size < size)
-        parsed_msg.error_subcode = *dataPtr++,size++;
+        parsed_msg.error_subcode = *dataPtr++, read_size++;
     else {
         LOG_ERR("Could not read the BGP sub code from notify message");
         return true;

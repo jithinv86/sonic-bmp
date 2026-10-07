@@ -26,15 +26,26 @@ namespace bgp {
     #define BGP_CAP_PARAM_TYPE      2
     #define BGP_AS_TRANS            23456                   // BGP ASN when AS exceeds 16bits
 
-    inline bool validateMessageLength(const unsigned char *data, size_t available,
-                                      size_t minimum, uint16_t &message_length) {
+    /**
+     * Decodes the BGP common header length and computes a parse frame that never
+     * exceeds the available bytes.
+     *
+     * \return false if the buffer cannot hold a BGP common header.  On success,
+     *         frame_length equals declared_length when the declared length is
+     *         consistent, otherwise it is clamped to the available bytes.
+     */
+    inline bool getMessageFrame(const unsigned char *data, size_t available,
+                                uint16_t &declared_length, size_t &frame_length) {
         if (data == nullptr || available < BGP_MSG_HDR_LEN) {
             return false;
         }
 
-        message_length = static_cast<uint16_t>(
+        declared_length = static_cast<uint16_t>(
                 (static_cast<uint16_t>(data[16]) << 8) | data[17]);
-        return message_length >= minimum && message_length <= available;
+
+        frame_length = (declared_length < BGP_MSG_HDR_LEN || declared_length > available)
+                ? available : declared_length;
+        return true;
     }
 
 

@@ -157,6 +157,7 @@ jobs:
       displayName: 'Install libswsscommon package'
 
     - script: |
+        set -ex
         rm Makefile
         ls -alh
         git branch
@@ -169,6 +170,7 @@ jobs:
       displayName: 'Build original openbmp for sanity check'
 
     - script: |
+        set -ex
         rm -rf build/
         mkdir build
         pushd build

@@ -590,8 +590,8 @@ void parseBMP::bufferBMPMessage(int sock) {
  * \param [in] len          Length of info TLV data to read
  */
 void parseBMP::parsePeerUpInfo(u_char *data, int len) {
-    if (len < 0)
-        throw "ERROR: Invalid BMP peer information length";
+    if (len <= 0)
+        return;
 
     bmp::TlvCursor cursor(data, static_cast<size_t>(len));
     bmp::TlvView info = {};
@@ -601,14 +601,14 @@ void parseBMP::parsePeerUpInfo(u_char *data, int len) {
         if (result == bmp::TlvReadResult::END)
             break;
         if (result == bmp::TlvReadResult::TRUNCATED_HEADER) {
-            LOG_WARN("Peer info message has %zu trailing bytes, expected a %d byte TLV header",
+            LOG_WARN("Peer info message has %zu trailing bytes, expected a %d byte TLV header; ignoring them",
                      cursor.remaining(), BMP_INFO_TLV_HDR_LEN);
-            throw "ERROR: Truncated BMP peer information TLV header";
+            break;
         }
         if (result == bmp::TlvReadResult::TRUNCATED_VALUE) {
-            LOG_WARN("Peer info message type %hu declares length %hu with only %zu bytes remaining",
+            LOG_WARN("Peer info message type %hu declares length %hu with only %zu bytes remaining; ignoring it",
                      info.type, info.length, cursor.remaining() - BMP_INFO_TLV_HDR_LEN);
-            throw "ERROR: Truncated BMP peer information TLV value";
+            break;
         }
 
         SELF_DEBUG("Peer info message type %hu and length %hu parsed", info.type, info.length);
@@ -841,19 +841,20 @@ void parseBMP::handleInitMsg(int sock, MsgBusInterface::obj_router &r_entry) {
         if (result == bmp::TlvReadResult::END)
             break;
         if (result == bmp::TlvReadResult::TRUNCATED_HEADER) {
-            LOG_WARN("Init message has %zu trailing bytes, expected a %d byte TLV header",
+            LOG_WARN("Init message has %zu trailing bytes, expected a %d byte TLV header; ignoring them",
                      cursor.remaining(), BMP_INFO_TLV_HDR_LEN);
-            throw "ERROR: Truncated BMP initiation TLV header";
+            break;
         }
         if (result == bmp::TlvReadResult::TRUNCATED_VALUE) {
-            LOG_WARN("Init message type %hu declares length %hu with only %zu bytes remaining",
+            LOG_WARN("Init message type %hu declares length %hu with only %zu bytes remaining; ignoring it",
                      info.type, info.length, cursor.remaining() - BMP_INFO_TLV_HDR_LEN);
-            throw "ERROR: Truncated BMP initiation TLV value";
+            break;
         }
 
         LOG_INFO("Init message type %hu and length %hu parsed", info.type, info.length);
 
-        if (info.length == 0 && info.type != INIT_TYPE_ROUTER_BGP_ID)
+        // ignore info lengths of zero
+        if (info.length == 0)
             continue;
 
         switch (info.type) {
@@ -878,9 +879,8 @@ void parseBMP::handleInitMsg(int sock, MsgBusInterface::obj_router &r_entry) {
 
             case INIT_TYPE_ROUTER_BGP_ID:
                 if (info.length != sizeof(in_addr_t)) {
-                    LOG_WARN("Init message type BGP ID has length %hu, expected %zu",
-                             info.length, sizeof(in_addr_t));
-                    throw "ERROR: Invalid BMP initiation BGP ID length";
+                    LOG_NOTICE("Init message type BGP ID not of IPv4 addr length");
+                    break;
                 }
                 inet_ntop(AF_INET, info.value, r_entry.bgp_id, sizeof(r_entry.bgp_id));
                 LOG_INFO("Init message type %hu = %s", info.type, r_entry.bgp_id);
@@ -911,14 +911,14 @@ void parseBMP::handleTermMsg(int sock, MsgBusInterface::obj_router &r_entry) {
         if (result == bmp::TlvReadResult::END)
             break;
         if (result == bmp::TlvReadResult::TRUNCATED_HEADER) {
-            LOG_WARN("Term message has %zu trailing bytes, expected a %d byte TLV header",
+            LOG_WARN("Term message has %zu trailing bytes, expected a %d byte TLV header; ignoring them",
                      cursor.remaining(), BMP_TERM_MSG_LEN);
-            throw "ERROR: Truncated BMP termination TLV header";
+            break;
         }
         if (result == bmp::TlvReadResult::TRUNCATED_VALUE) {
-            LOG_WARN("Term message type %hu declares length %hu with only %zu bytes remaining",
+            LOG_WARN("Term message type %hu declares length %hu with only %zu bytes remaining; ignoring it",
                      termMsg.type, termMsg.length, cursor.remaining() - BMP_TERM_MSG_LEN);
-            throw "ERROR: Truncated BMP termination TLV value";
+            break;
         }
 
         LOG_INFO("Term message type %hu and length %hu parsed", termMsg.type, termMsg.length);
@@ -935,12 +935,13 @@ void parseBMP::handleTermMsg(int sock, MsgBusInterface::obj_router &r_entry) {
 
             case TERM_TYPE_REASON :
             {
-                if (termMsg.length != sizeof(uint16_t)) {
-                    LOG_WARN("Term reason has length %hu, expected %zu",
+                if (termMsg.length < sizeof(uint16_t)) {
+                    LOG_WARN("Term reason has length %hu, expected %zu; ignoring it",
                              termMsg.length, sizeof(uint16_t));
-                    throw "ERROR: Invalid BMP termination reason length";
+                    break;
                 }
 
+                // Get the term reason code from info data (first 2 bytes)
                 uint16_t term_reason;
                 memcpy(&term_reason, termMsg.value, sizeof(term_reason));
                 bgp::SWAP_BYTES(&term_reason);

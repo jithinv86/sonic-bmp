@@ -170,16 +170,18 @@ private:
      *      Reads the capabilities from buffer.  The parsed data will be
      *      returned via the out params.
      *
-     * \param [in]   data               Pointer to raw bgp payload data, starting at the open/cap message
-     * \param [in]   size               Size of the data available to read; prevent overrun when reading
+     * \param [in]   data               Pointer to the optional parameters, after the open header
+     * \param [in]   size               Size of the optional parameters available to read; prevent overrun when reading
+     * \param [in]   extended           True if parameters use RFC 9072 extended (two-octet) lengths
      * \param [in]   openMessageIsSent  If open message is sent. False if received
      * \param [out]  asn                Reference to the ASN that was discovered
      * \param [out]  capabilities       Reference to the capabilities list<string> (decoded values)
      *
-     * \return ZERO is error, otherwise a positive value indicating the number of bytes read
+     * \return false if a capability is invalid and the message must be rejected, true otherwise.
+     *         Truncated or malformed parameters/capabilities are skipped without reading past size.
      */
-    size_t parseCapabilities(u_char *data, size_t size, bool openMessageIsSent, uint32_t &asn,
-                             std::list<std::string> &capabilities);
+    bool parseCapabilities(const u_char *data, size_t size, bool extended, bool openMessageIsSent, uint32_t &asn,
+                           std::list<std::string> &capabilities);
 };
 
 } /* namespace bgp */

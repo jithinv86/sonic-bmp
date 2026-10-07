@@ -89,6 +89,12 @@ bool parseBGP::handleUpdate(u_char *data, size_t size) {
     int read_size = 0;
 
     if (parseBgpHeader(data, size) == BGP_MSG_UPDATE) {
+        if (common_hdr.len != data_bytes_remaining + BGP_MSG_HDR_LEN) {
+            LOG_NOTICE("%s: rtr=%s: BGP update length %hu does not match the %zu byte message, skipping update",
+                        p_entry->peer_addr, router_addr.c_str(), common_hdr.len, size);
+            return true;
+        }
+
         data += BGP_MSG_HDR_LEN;
 
         /*
@@ -172,6 +178,7 @@ int parseBGP::handleUpEvent(u_char *data, size_t size, MsgBusInterface::obj_peer
     list <string>       cap_list;
     string              local_bgp_id, remote_bgp_id;
     size_t              read_size;
+    size_t              frame_len;
     int                 total_read_size = 0;
 
     p_info->recv_four_octet_asn = false;
@@ -190,19 +197,21 @@ int parseBGP::handleUpEvent(u_char *data, size_t size, MsgBusInterface::obj_peer
             throw "Failed to read open message";
         }
 
+        frame_len = BGP_MSG_HDR_LEN + data_bytes_remaining;
+
         read_size = oMsg.parseOpenMsg(data + BGP_MSG_HDR_LEN, data_bytes_remaining, true,
                                       up_event->local_asn, up_event->local_hold_time,
                                       local_bgp_id, cap_list);
 
-        total_read_size = common_hdr.len;
+        total_read_size = static_cast<int>(frame_len);
 
-        if (read_size != data_bytes_remaining) {
+        if (!read_size) {
             LOG_ERR("%s: rtr=%s: Failed to read sent open message",  p_entry->peer_addr, router_addr.c_str());
             throw "Failed to read open message";
         }
 
-        data += common_hdr.len;
-        size -= common_hdr.len;
+        data += frame_len;                                          // Move the pointer past the sent open message
+        size -= frame_len;
 
         strncpy(up_event->local_bgp_id, local_bgp_id.c_str(), sizeof(up_event->local_bgp_id));
 
@@ -240,12 +249,14 @@ int parseBGP::handleUpEvent(u_char *data, size_t size, MsgBusInterface::obj_peer
             throw "Failed to read open message";
         }
 
+        frame_len = BGP_MSG_HDR_LEN + data_bytes_remaining;
+
         read_size = oMsg.parseOpenMsg(data + BGP_MSG_HDR_LEN, data_bytes_remaining, false, up_event->remote_asn,
                                       up_event->remote_hold_time, remote_bgp_id, cap_list);
 
-        total_read_size += common_hdr.len;
+        total_read_size += static_cast<int>(frame_len);
 
-        if (read_size != data_bytes_remaining) {
+        if (!read_size) {
             LOG_ERR("%s: rtr=%s: Failed to read received open message", p_entry->peer_addr, router_addr.c_str());
             throw "Failed to read open message";
         }
@@ -293,12 +304,14 @@ int parseBGP::handleUpEvent(u_char *data, size_t size, MsgBusInterface::obj_peer
  */
 u_char parseBGP::parseBgpHeader(u_char *data, size_t size) {
     bzero(&common_hdr, sizeof(common_hdr));
+    data_bytes_remaining = 0;
     uint16_t message_length = 0;
+    size_t   frame_length = 0;
 
     /*
      * Error out if data size is not large enough for common header
      */
-    if (!bgp::validateMessageLength(data, size, BGP_MSG_HDR_LEN, message_length)) {
+    if (!bgp::getMessageFrame(data, size, message_length, frame_length)) {
         LOG_WARN("%s: rtr=%s: BGP message is being parsed is %d but expected at least %d in size",
                 p_entry->peer_addr, router_addr.c_str(), size, BGP_MSG_HDR_LEN);
         return 0;
@@ -307,8 +320,20 @@ u_char parseBGP::parseBgpHeader(u_char *data, size_t size) {
     memcpy(&common_hdr, data, BGP_MSG_HDR_LEN);
     common_hdr.len = message_length;
 
+    /*
+     * Warn if the BGP message length is inconsistent with the passed buffer.  Parsing is limited
+     *      to the bytes that are actually available in the buffer.
+     */
+    if (message_length < BGP_MSG_HDR_LEN) {
+        LOG_WARN("%s: rtr=%s: BGP message size of %hu is less than the header size %d, limiting parse to %zu bytes",
+                p_entry->peer_addr, router_addr.c_str(), message_length, BGP_MSG_HDR_LEN, frame_length);
+    } else if (message_length > size) {
+        LOG_WARN("%s: rtr=%s: BGP message size of %hu is greater than passed data buffer %zu, limiting parse to available bytes",
+                p_entry->peer_addr, router_addr.c_str(), message_length, size);
+    }
+
     // Update remaining bytes left of the message
-    data_bytes_remaining = common_hdr.len - BGP_MSG_HDR_LEN;
+    data_bytes_remaining = static_cast<unsigned int>(frame_length - BGP_MSG_HDR_LEN);
 
     SELF_DEBUG("%s: rtr=%s: BGP hdr len = %u, type = %d", p_entry->peer_addr, router_addr.c_str(), common_hdr.len, common_hdr.type);
 

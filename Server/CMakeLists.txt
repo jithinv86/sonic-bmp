@@ -199,16 +199,26 @@ endif ()
 # Set the binary
 add_executable (openbmpd ${SRC_FILES})
 
-if (BUILD_TESTING)
-    add_executable(bmp_tlv_test tests/BMPTlvTest.cpp)
-    add_test(bmp_tlv_test bmp_tlv_test)
-endif()
-
 # Link the binary
 target_link_libraries (openbmpd ${LIBS} ${LIBSWSSCOMMON_LIBRARY})
 
 if (LIBRT_LIBRARY)
     target_link_libraries(openbmpd ${LIBRT_LIBRARY} ${LIBSWSSCOMMON_LIBRARY})
+endif()
+
+if (BUILD_TESTING)
+    add_executable(bmp_tlv_test tests/BMPTlvTest.cpp)
+    add_test(bmp_tlv_test bmp_tlv_test)
+
+    # Handler tests link the production sources except the daemon entry point
+    set (TEST_SRC_FILES ${SRC_FILES})
+    list (REMOVE_ITEM TEST_SRC_FILES src/openbmp.cpp)
+    add_executable(bmp_handler_test tests/BMPHandlerTest.cpp ${TEST_SRC_FILES})
+    target_link_libraries(bmp_handler_test ${LIBS} ${LIBSWSSCOMMON_LIBRARY})
+    if (LIBRT_LIBRARY)
+        target_link_libraries(bmp_handler_test ${LIBRT_LIBRARY})
+    endif()
+    add_test(bmp_handler_test bmp_handler_test)
 endif()
 
 # Install the binary and configs
