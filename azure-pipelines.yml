@@ -164,6 +164,7 @@ jobs:
         pushd build
         cmake -DCMAKE_INSTALL_PREFIX:PATH=/usr ../
         make
+        ctest -V
         popd
       displayName: 'Build original openbmp for sanity check'
 
@@ -173,6 +174,7 @@ jobs:
         pushd build
         cmake -DCMAKE_INSTALL_PREFIX:PATH=/usr -DENABLE_REDIS=ON ../
         make
+        ctest -V
       displayName: 'Build sonic-bmp'
 
     - script: |

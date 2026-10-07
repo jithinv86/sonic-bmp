@@ -97,6 +97,10 @@ Do the following:
     cmake -DCMAKE_INSTALL_PREFIX:PATH=/usr ../  
     make
 
+Run the parser regression tests from the build directory:
+
+    ctest -V
+
 ### Example output
 ```
 localadmin@toolServer:/ws/ws-openbmp/openbmp/build$ cmake ../

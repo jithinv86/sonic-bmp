@@ -8,6 +8,7 @@
  */
 #include "OpenMsg.h"
 #include "AddPathDataContainer.h"
+#include "BGPOpenValidation.h"
 #include "BMPReader.h"
 
 #include <string>
@@ -66,8 +67,8 @@ size_t OpenMsg::parseOpenMsg(u_char *data, size_t size, bool openMessageIsSent, 
     /*
      * Make sure available size is large enough for an open message
      */
-    if (size < sizeof(open_hdr)) {
-        LOG_WARN("%s: Cloud not read open message due to buffer having less bytes than open message size", peer_addr.c_str());
+    if (!bgp::validateOpenPayload(data, size)) {
+        LOG_WARN("%s: Could not read malformed or truncated open message", peer_addr.c_str());
         return 0;
     }
 
@@ -89,35 +90,18 @@ size_t OpenMsg::parseOpenMsg(u_char *data, size_t size, bool openMessageIsSent, 
     SELF_DEBUG("%s: Open message:ver=%d hold=%u asn=%hu bgp_id=%s params_len=%d", peer_addr.c_str(),
                 open_hdr.ver, open_hdr.hold, open_hdr.asn, bgp_id.c_str(), open_hdr.param_len);
 
-    /*
-     * Make sure the buffer contains the rest of the open message, but allow a zero length in case the
-     *  data is missing on purpose (router implementation)
-     */
     if (open_hdr.param_len == 0) {
         LOG_WARN("%s: Capabilities in open message is ZERO/empty, this is abnormal and likely a router implementation issue.", peer_addr.c_str());
         return read_size;
     }
 
-    else if (open_hdr.param_len > (size - read_size)) {
-        LOG_WARN("%s: Capabilities in open message are truncated, attempting parse what's there; param_len %d > bgp msg bytes remaining of %d",
-                 peer_addr.c_str(), open_hdr.param_len, (size - read_size));
-
-        // Parse as many capabilities as possible
-        parseCapabilities(bufPtr, (size - read_size), openMessageIsSent, asn, capabilities);
-
-        read_size += (size - read_size);
-
-    } else {
-
-        if (!parseCapabilities(bufPtr, open_hdr.param_len, openMessageIsSent, asn, capabilities)) {
-            LOG_WARN("%s: Could not read capabilities correctly in buffer, message is invalid.", peer_addr.c_str());
-            return 0;
-        }
-
-        read_size += open_hdr.param_len;
+    if (parseCapabilities(bufPtr, open_hdr.param_len, openMessageIsSent, asn, capabilities) !=
+            open_hdr.param_len) {
+        LOG_WARN("%s: Could not read capabilities correctly in buffer, message is invalid.", peer_addr.c_str());
+        return 0;
     }
 
-
+    read_size += open_hdr.param_len;
     return read_size;
 }
 
@@ -204,16 +188,15 @@ size_t OpenMsg::parseCapabilities(u_char *data, size_t size, bool openMessageIsS
 
                     case BGP_CAP_ADD_PATH: {
                         cap_add_path_data data;
+                        u_char *value_ptr = cap_ptr + 2;
 
                         /*
                          * Move past the cap code and len, then iterate over all paths encoded
                          */
-                        cap_ptr += 2;
                         if (cap->len >= 4) {
 
                             for (int l = 0; l < cap->len; l += 4) {
-                                memcpy(&data, cap_ptr, 4);
-                                cap_ptr += 4;
+                                memcpy(&data, value_ptr + l, 4);
 
                                 bgp::SWAP_BYTES(&data.afi);
 

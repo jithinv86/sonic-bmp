@@ -10,6 +10,8 @@ set (OPENBMPD_VERSION "${OPENBMP_VER_MAJOR}.${OPENBMP_VER_MINOR}.${OPENBMP_VER_P
 cmake_minimum_required (VERSION 2.6)
 project (OPENBMP)
 
+include(CTest)
+
 # find and include boost
 find_package( Boost 1.41.0 REQUIRED)
    if(Boost_FOUND)
@@ -40,5 +42,4 @@ FIND_PROGRAM(RPKG_CMD rpmbuild)
 IF(RPKG_CMD)
   add_subdirectory (rpm_package)
 ENDIF(RPKG_CMD)
-
 

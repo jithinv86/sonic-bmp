@@ -199,6 +199,11 @@ endif ()
 # Set the binary
 add_executable (openbmpd ${SRC_FILES})
 
+if (BUILD_TESTING)
+    add_executable(bmp_tlv_test tests/BMPTlvTest.cpp)
+    add_test(bmp_tlv_test bmp_tlv_test)
+endif()
+
 # Link the binary
 target_link_libraries (openbmpd ${LIBS} ${LIBSWSSCOMMON_LIBRARY})
 

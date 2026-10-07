@@ -13,6 +13,7 @@
 #include <string>
 #include <cstdint>
 #include <sstream>
+#include <cstddef>
 #include <cinttypes>
 #include <cstring>
 #include <sys/types.h>
@@ -24,6 +25,17 @@ namespace bgp {
     #define BGP_VERSION             4
     #define BGP_CAP_PARAM_TYPE      2
     #define BGP_AS_TRANS            23456                   // BGP ASN when AS exceeds 16bits
+
+    inline bool validateMessageLength(const unsigned char *data, size_t available,
+                                      size_t minimum, uint16_t &message_length) {
+        if (data == nullptr || available < BGP_MSG_HDR_LEN) {
+            return false;
+        }
+
+        message_length = static_cast<uint16_t>(
+                (static_cast<uint16_t>(data[16]) << 8) | data[17]);
+        return message_length >= minimum && message_length <= available;
+    }
 
 
     /**

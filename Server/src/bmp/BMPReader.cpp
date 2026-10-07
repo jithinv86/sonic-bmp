@@ -234,13 +234,20 @@ bool BMPReader::ReadIncomingMsg(BMPListener::ClientInfo *client, MsgBusInterface
                     // Parse the BGP sent/received open messages
                     int read = pBGP->handleUpEvent(pBMP->bmp_data, pBMP->bmp_data_len, &up_event);
 
-                                        // Free the bgp parser
+                    // Free the bgp parser
                     delete pBGP;
 
+                    if (read < 0 || static_cast<size_t>(read) > pBMP->bmp_data_len) {
+                        LOG_ERR("%s: PEER UP parser consumed %d bytes from a %zu byte buffer",
+                                p_entry.peer_addr, read, pBMP->bmp_data_len);
+                        throw "ERROR: Invalid BMP Peer Up information offset";
+                    }
+
                     // Read info TLV data
-                    if (((int)pBMP->bmp_data_len - read) > 0) {
-                        SELF_DEBUG("%s: PEER UP has info data, parsing %d bytes", p_entry.peer_addr, pBMP->bmp_data_len - read);
-                        pBMP->parsePeerUpInfo(pBMP->bmp_data + read, (int)pBMP->bmp_data_len - read);
+                    size_t info_len = pBMP->bmp_data_len - static_cast<size_t>(read);
+                    if (info_len > 0) {
+                        SELF_DEBUG("%s: PEER UP has info data, parsing %zu bytes", p_entry.peer_addr, info_len);
+                        pBMP->parsePeerUpInfo(pBMP->bmp_data + read, static_cast<int>(info_len));
                     }
 
                     // Add the up event to the DB
